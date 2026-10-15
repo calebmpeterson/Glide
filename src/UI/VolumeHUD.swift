@@ -42,7 +42,7 @@ final class VolumeHUD {
         content.setAccessibilityRole(.group)
     }
 
-    func show(volume: Float) {
+    func show(volume: Float, anchoredTo statusItem: NSStatusItem?) {
         let boundedVolume = min(max(volume, 0), 1)
         content.volume = boundedVolume
         let percent = Int((boundedVolume * 100).rounded())
@@ -51,10 +51,7 @@ final class VolumeHUD {
         content.needsDisplay = true
 
         if !panel.isVisible {
-            let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main
-            if let frame = screen?.visibleFrame {
-                panel.setFrameOrigin(NSPoint(x: frame.maxX - 278, y: frame.minY + 30))
-            }
+            position(anchoredTo: statusItem)
             panel.orderFrontRegardless()
         }
 
@@ -62,6 +59,42 @@ final class VolumeHUD {
         let workItem = DispatchWorkItem { [weak panel] in panel?.orderOut(nil) }
         dismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: workItem)
+    }
+
+    func hide() {
+        dismissWorkItem?.cancel()
+        dismissWorkItem = nil
+        panel.orderOut(nil)
+    }
+
+    private func position(anchoredTo statusItem: NSStatusItem?) {
+        let primaryScreen = NSScreen.main
+        guard let visibleFrame = primaryScreen?.visibleFrame else { return }
+
+        let itemFrame: NSRect? = {
+            guard let button = statusItem?.button,
+                  let window = button.window,
+                  window.screen == primaryScreen
+            else { return nil }
+            return window.convertToScreen(button.convert(button.bounds, to: nil))
+        }()
+
+        let panelSize = panel.frame.size
+        let x: CGFloat
+        let y: CGFloat
+        if let itemFrame {
+            x = itemFrame.midX - panelSize.width / 2
+            y = itemFrame.minY - panelSize.height - 6
+        } else {
+            // The status item button can be temporarily unavailable during
+            // startup or display reconfiguration. Keep the fallback on primary.
+            x = visibleFrame.maxX - panelSize.width - 18
+            y = visibleFrame.maxY - panelSize.height - 12
+        }
+
+        let clampedX = min(max(x, visibleFrame.minX + 8), visibleFrame.maxX - panelSize.width - 8)
+        let clampedY = min(max(y, visibleFrame.minY + 8), visibleFrame.maxY - panelSize.height - 8)
+        panel.setFrameOrigin(NSPoint(x: clampedX, y: clampedY))
     }
 }
 

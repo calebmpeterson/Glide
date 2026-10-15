@@ -5,6 +5,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <time.h>
 
 typedef struct { float x, y; } MTPoint;
 typedef struct { MTPoint position, velocity; } Readout;
@@ -30,17 +31,27 @@ static void (*MTUnregisterContactFrameCallback)(void *, MTFrameCallback);
 static void (*MTDeviceStart)(void *, int);
 static void (*MTDeviceStop)(void *);
 
-static int emit(int count, int id, float x, float y) {
+static uint64_t clock_ns(clockid_t clock_id) {
+    struct timespec value;
+    if (clock_gettime(clock_id, &value) != 0) return 0;
+    return (uint64_t)value.tv_sec * 1000000000ULL + (uint64_t)value.tv_nsec;
+}
+
+static int emit(int count, int id, float x, float y, uint64_t wall_start, uint64_t cpu_start) {
     EVTrackpadSampleHandler handler = atomic_load(&sample_handler);
-    if (handler) handler(count, id, x, y);
+    if (handler) handler(count, id, x, y,
+        clock_ns(CLOCK_MONOTONIC_RAW) - wall_start,
+        clock_ns(CLOCK_THREAD_CPUTIME_ID) - cpu_start);
     return 0;
 }
 
 static int contact_frame(void *device, Finger *fingers, int count, double timestamp, int frame) {
+    uint64_t filter_wall_start = clock_ns(CLOCK_MONOTONIC_RAW);
+    uint64_t filter_cpu_start = clock_ns(CLOCK_THREAD_CPUTIME_ID);
     (void)timestamp;
     (void)frame;
     if (device != atomic_load(&selected_device)) return 0;
-    if (count < 0 || count > 32 || (count > 0 && fingers == NULL)) return emit(-1, 0, 0, 0);
+    if (count < 0 || count > 32 || (count > 0 && fingers == NULL)) return emit(-1, 0, 0, 0, filter_wall_start, filter_cpu_start);
 
     int active_count = 0;
     Finger *contact = NULL;
@@ -50,12 +61,12 @@ static int contact_frame(void *device, Finger *fingers, int count, double timest
             contact = &fingers[i];
         }
     }
-    if (active_count != 1) return emit(active_count, 0, 0, 0);
+    if (active_count != 1) return emit(active_count, 0, 0, 0, filter_wall_start, filter_cpu_start);
 
     float x = contact->normalized.position.x;
     float y = contact->normalized.position.y;
-    if (!isfinite(x) || !isfinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return emit(-1, 0, 0, 0);
-    return emit(1, contact->id, x, y);
+    if (!isfinite(x) || !isfinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return emit(-1, 0, 0, 0, filter_wall_start, filter_cpu_start);
+    return emit(1, contact->id, x, y, filter_wall_start, filter_cpu_start);
 }
 
 static int resolve_symbols(void) {

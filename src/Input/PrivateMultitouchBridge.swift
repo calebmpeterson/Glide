@@ -28,25 +28,34 @@ private enum CallbackRegistry {
         lock.unlock()
     }
 
-    static func deliver(contactCount: Int32, contactID: Int32, x: Float, y: Float) {
+    static func deliver(contactCount: Int32, contactID: Int32, x: Float, y: Float,
+                        filterWallNanoseconds: UInt64, filterCPUNanoseconds: UInt64) {
+        let traceID = PipelineLogger.shared.beginTrace()
+        let callbackStarted = PipelineLogger.beginMeasurement()
+        PipelineLogger.shared.recordDuration(
+            traceID: traceID, stage: "trackpad.c-filter",
+            wall: filterWallNanoseconds, cpu: filterCPUNanoseconds
+        )
         lock.lock()
         let callback = handler
         lock.unlock()
-        let traceID = PipelineLogger.shared.beginTrace()
-        let receivedAt = DispatchTime.now().uptimeNanoseconds
-        PipelineLogger.shared.record(traceID: traceID, stage: "bridge.swift-received", at: receivedAt)
+        PipelineLogger.shared.record(traceID: traceID, stage: "bridge.swift-received", at: callbackStarted.wall)
         callback?(TrackpadSample(
             contactCount: Int(contactCount), contactID: Int(contactID), x: x, y: y,
             timestamp: ContinuousClock().now,
             traceID: traceID,
-            receivedAtNanoseconds: receivedAt
+            receivedAtNanoseconds: callbackStarted.wall
         ))
+        PipelineLogger.shared.finishMeasurement(callbackStarted, traceID: traceID, stage: "bridge.swift-callback")
     }
 }
 
 @_cdecl("glide_trackpad_sample")
-private func glide_trackpad_sample(_ count: Int32, _ identifier: Int32, _ x: Float, _ y: Float) {
-    CallbackRegistry.deliver(contactCount: count, contactID: identifier, x: x, y: y)
+private func glide_trackpad_sample(_ count: Int32, _ identifier: Int32, _ x: Float, _ y: Float,
+                                  _ filterWallNanoseconds: UInt64, _ filterCPUNanoseconds: UInt64) {
+    CallbackRegistry.deliver(contactCount: count, contactID: identifier, x: x, y: y,
+                             filterWallNanoseconds: filterWallNanoseconds,
+                             filterCPUNanoseconds: filterCPUNanoseconds)
 }
 
 final class PrivateMultitouchBridge: TrackpadCapturing {

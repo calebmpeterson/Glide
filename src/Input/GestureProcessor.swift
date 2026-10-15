@@ -26,7 +26,9 @@ final class GestureProcessor: @unchecked Sendable {
     private var enabled = false
     private var pendingDelta: Float = 0
     private var lastAudioWriteAt: UInt64?
-    private let minimumWriteInterval: UInt64 = 16_666_667
+    // Allow audio writes at up to 120 Hz so gesture deltas are accumulated for
+    // less time before reaching CoreAudio.
+    private let minimumWriteInterval: UInt64 = 8_333_333
 
     init(audio: AudioController, receiver: @escaping @MainActor @Sendable (Outcome) -> Void) {
         self.audio = audio
@@ -64,8 +66,15 @@ final class GestureProcessor: @unchecked Sendable {
     }
 
     private func process(_ sample: TrackpadSample, optionIsDown: Bool) {
-        guard enabled else { return }
+        let frameStarted = PipelineLogger.beginMeasurement()
+        defer { PipelineLogger.shared.finishMeasurement(frameStarted, traceID: sample.traceID, stage: "processor.frame") }
         PipelineLogger.shared.record(traceID: sample.traceID, stage: "processor.started")
+        PipelineLogger.shared.recordDuration(
+            traceID: sample.traceID,
+            stage: "processor.queue-wait",
+            wall: frameStarted.wall &- sample.receivedAtNanoseconds
+        )
+        guard enabled else { return }
         guard (0...32).contains(sample.contactCount) else {
             gesture.cancel()
             pendingDelta = 0
@@ -75,21 +84,23 @@ final class GestureProcessor: @unchecked Sendable {
 
         if sample.contactCount == 0 {
             if let device = gestureDevice { writePendingDelta(for: device, traceID: sample.traceID) }
-            _ = gesture.feed(settings: settings, sample: sample, optionIsDown: optionIsDown)
+            _ = feedGesture(sample, optionIsDown: optionIsDown)
             gestureDevice = nil
             return
         }
 
         if sample.contactCount != 1 {
             pendingDelta = 0
-            _ = gesture.feed(settings: settings, sample: sample, optionIsDown: optionIsDown)
+            _ = feedGesture(sample, optionIsDown: optionIsDown)
             return
         }
 
         if gestureDevice == nil {
+            let measurement = PipelineLogger.beginMeasurement()
             gestureDevice = try? audio.currentOutput()
+            PipelineLogger.shared.finishMeasurement(measurement, traceID: sample.traceID, stage: "audio.current-output")
         }
-        let delta = gesture.feed(settings: settings, sample: sample, optionIsDown: optionIsDown)
+        let delta = feedGesture(sample, optionIsDown: optionIsDown)
         guard let device = gestureDevice else { return }
         if delta == nil, pendingDelta != 0 {
             // A previously active gesture was rejected; do not flush its last step.
@@ -111,18 +122,27 @@ final class GestureProcessor: @unchecked Sendable {
         pendingDelta = 0
 
         do {
-            PipelineLogger.shared.record(traceID: traceID, stage: "audio.write-started")
-            let volume = try audio.adjust(delta: delta, expectedDevice: device)
+            PipelineLogger.shared.record(traceID: traceID, stage: "audio.adjust-started")
+            let measurement = PipelineLogger.beginMeasurement()
+            let volume = try audio.adjust(delta: delta, expectedDevice: device, traceID: traceID)
+            PipelineLogger.shared.finishMeasurement(measurement, traceID: traceID, stage: "audio.adjust-total")
+            PipelineLogger.shared.record(traceID: traceID, stage: "audio.adjust-finished")
             lastAudioWriteAt = DispatchTime.now().uptimeNanoseconds
-            PipelineLogger.shared.record(traceID: traceID, stage: "audio.write-finished")
             publish(.volume(volume, traceID))
         } catch {
+            PipelineLogger.shared.record(traceID: traceID, stage: "audio.adjust-failed")
             gesture.cancel()
             gestureDevice = nil
             pendingDelta = 0
-            PipelineLogger.shared.record(traceID: traceID, stage: "audio.write-failed")
             publish(.audioUnavailable(traceID))
         }
+    }
+
+    private func feedGesture(_ sample: TrackpadSample, optionIsDown: Bool) -> Float? {
+        let measurement = PipelineLogger.beginMeasurement()
+        let delta = gesture.feed(settings: settings, sample: sample, optionIsDown: optionIsDown)
+        PipelineLogger.shared.finishMeasurement(measurement, traceID: sample.traceID, stage: "gesture.feed")
+        return delta
     }
 
     private func publish(_ outcome: Outcome) {
@@ -134,10 +154,12 @@ final class GestureProcessor: @unchecked Sendable {
 /// Audio writes still happen for every gesture frame; this merely prevents the
 /// HUD from replaying stale volume values after the finger has moved on.
 private final class PresentationDelivery: @unchecked Sendable {
+    private let minimumDeliveryInterval: UInt64 = 16_666_667
     private let lock = NSLock()
     private let receiver: @MainActor @Sendable (GestureProcessor.Outcome) -> Void
     private var latest: GestureProcessor.Outcome?
     private var scheduled = false
+    private var lastDeliveryAt: UInt64?
 
     init(receiver: @escaping @MainActor @Sendable (GestureProcessor.Outcome) -> Void) {
         self.receiver = receiver
@@ -156,20 +178,32 @@ private final class PresentationDelivery: @unchecked Sendable {
         scheduleDelivery()
     }
 
-    private func scheduleDelivery() {
-        Task { @MainActor [weak self] in self?.deliverLatest() }
+    private func scheduleDelivery(after delay: UInt64 = 0) {
+        Task { @MainActor [weak self] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            self?.deliverLatest()
+        }
     }
 
     @MainActor
     private func deliverLatest() {
         lock.lock()
+        let now = DispatchTime.now().uptimeNanoseconds
+        if let lastDeliveryAt, now - lastDeliveryAt < minimumDeliveryInterval {
+            let delay = minimumDeliveryInterval - (now - lastDeliveryAt)
+            lock.unlock()
+            scheduleDelivery(after: delay)
+            return
+        }
         let outcome = latest
         latest = nil
+        if outcome != nil { lastDeliveryAt = now }
         lock.unlock()
 
         if let outcome {
-            PipelineLogger.shared.record(traceID: outcome.traceID, stage: "presentation.delivered")
+            let measurement = PipelineLogger.beginMeasurement()
             receiver(outcome)
+            PipelineLogger.shared.finishMeasurement(measurement, traceID: outcome.traceID, stage: "presentation.receiver")
         }
 
         lock.lock()

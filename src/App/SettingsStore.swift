@@ -16,9 +16,28 @@ struct Settings: Codable, Equatable, Sendable {
     var sensitivity: Float = 1.0
     var inverted = false
     var requireOption = false
+    var showsHUD = true
     var excludedBundleIDs: [String] = []
 
     static let `default` = Settings()
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, edge, edgeWidth, sensitivity, inverted, requireOption, showsHUD, excludedBundleIDs
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        edge = try values.decodeIfPresent(Edge.self, forKey: .edge) ?? .right
+        edgeWidth = try values.decodeIfPresent(Float.self, forKey: .edgeWidth) ?? 0.08
+        sensitivity = try values.decodeIfPresent(Float.self, forKey: .sensitivity) ?? 1.0
+        inverted = try values.decodeIfPresent(Bool.self, forKey: .inverted) ?? false
+        requireOption = try values.decodeIfPresent(Bool.self, forKey: .requireOption) ?? false
+        showsHUD = try values.decodeIfPresent(Bool.self, forKey: .showsHUD) ?? true
+        excludedBundleIDs = try values.decodeIfPresent([String].self, forKey: .excludedBundleIDs) ?? []
+    }
 
     func validated() -> Settings? {
         guard edgeWidth.isFinite, (0.03...0.20).contains(edgeWidth),

@@ -16,7 +16,6 @@ final class GlideController: ObservableObject {
     private let capture: TrackpadCapturing
     private let audio: AudioController
     private let hud = VolumeHUD()
-    private let showsVolumeHUD = true
     private lazy var gestureProcessor = GestureProcessor(audio: audio) { [weak self] outcome in
         self?.receive(outcome)
     }
@@ -32,8 +31,8 @@ final class GlideController: ObservableObject {
         self.store = store
         self.capture = capture
         self.audio = audio
-        settings = store.load()
         PipelineLogger.shared.startNewSession()
+        settings = store.load()
         configureStatusItem()
         refreshVolume()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -51,6 +50,7 @@ final class GlideController: ObservableObject {
         valid.enabled = isEnabled
         settings = valid
         store.save(valid)
+        if !valid.showsHUD { hud.hide() }
         if isEnabled { gestureProcessor.update(settings: valid) }
     }
 
@@ -109,7 +109,7 @@ final class GlideController: ObservableObject {
         case let .volume(updatedVolume, _):
             volumePercent = Int((updatedVolume * 100).rounded())
             updateStatusItem()
-            if showsVolumeHUD { hud.show(volume: updatedVolume) }
+            if settings.showsHUD { hud.show(volume: updatedVolume, anchoredTo: statusItem) }
             statusMessage = "Listening for a one-finger edge swipe."
         case .invalidInput:
             statusMessage = "Invalid trackpad input. Lift all fingers and retry."

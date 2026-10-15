@@ -73,13 +73,27 @@ final class AudioController: VolumeControlling, @unchecked Sendable {
         guard status == noErr else { throw AudioControllerError.operationFailed(status) }
     }
 
-    func adjust(delta: Float, expectedDevice: AudioDeviceID) throws -> Float {
+    func adjust(delta: Float, expectedDevice: AudioDeviceID, traceID: UInt64) throws -> Float {
         guard delta.isFinite else { throw AudioControllerError.unavailable }
-        guard try currentOutput() == expectedDevice else { throw AudioControllerError.changedOutput }
+        var measurement = PipelineLogger.beginMeasurement()
+        let outputBeforeRead = try currentOutput()
+        PipelineLogger.shared.finishMeasurement(measurement, traceID: traceID, stage: "audio.check-output-before-read")
+        guard outputBeforeRead == expectedDevice else { throw AudioControllerError.changedOutput }
+
+        measurement = PipelineLogger.beginMeasurement()
         let before = try readVolume(for: expectedDevice)
-        guard try currentOutput() == expectedDevice else { throw AudioControllerError.changedOutput }
-        try setVolume(before + delta, for: expectedDevice)
-        return try readVolume(for: expectedDevice)
+        PipelineLogger.shared.finishMeasurement(measurement, traceID: traceID, stage: "audio.read-volume-before")
+
+        measurement = PipelineLogger.beginMeasurement()
+        let outputBeforeWrite = try currentOutput()
+        PipelineLogger.shared.finishMeasurement(measurement, traceID: traceID, stage: "audio.check-output-before-write")
+        guard outputBeforeWrite == expectedDevice else { throw AudioControllerError.changedOutput }
+
+        measurement = PipelineLogger.beginMeasurement()
+        let requestedVolume = min(max(before + delta, 0), 1)
+        try setVolume(requestedVolume, for: expectedDevice)
+        PipelineLogger.shared.finishMeasurement(measurement, traceID: traceID, stage: "audio.set-volume")
+        return requestedVolume
     }
 
     private var volumeAddress: AudioObjectPropertyAddress {

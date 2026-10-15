@@ -48,6 +48,14 @@ struct PreferencesView: View {
                 Toggle("Require Option key", isOn: $draft.requireOption)
             }
 
+            Section("Feedback") {
+                Toggle("Show volume HUD", isOn: $draft.showsHUD)
+                    .accessibilityHint("Shows or hides the on-screen volume indicator when volume changes.")
+                Text("The menubar percentage remains visible when the HUD is off.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Status") {
                 LabeledContent("System volume") { Text(controller.volumePercent.map { "\($0)%" } ?? "Unavailable") }
                 LabeledContent("Output control") {
