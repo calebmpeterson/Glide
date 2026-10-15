@@ -1,0 +1,11 @@
+# Local app bundles, test executables, and compiler caches
+/build/
+/DerivedData/
+/.build/
+
+# macOS metadata and editor state
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
