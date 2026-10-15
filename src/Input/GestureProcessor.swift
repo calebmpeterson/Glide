@@ -5,6 +5,12 @@ import Foundation
 /// Owns the serial, non-UI path from a contact frame to one CoreAudio write.
 /// It has no buffer: each callback is processed in arrival order on this queue.
 final class GestureProcessor: @unchecked Sendable {
+    private struct DeviceGestureState {
+        var gesture = GestureEngine()
+        var outputDevice: AudioDeviceID?
+        var pendingDelta: Float = 0
+    }
+
     enum Outcome: Sendable {
         case volume(Float, UInt64)
         case invalidInput(UInt64)
@@ -21,10 +27,8 @@ final class GestureProcessor: @unchecked Sendable {
     private let audio: AudioController
     private let presentation: PresentationDelivery
     private var settings = Settings.default
-    private var gesture = GestureEngine()
-    private var gestureDevice: AudioDeviceID?
+    private var deviceStates: [UInt: DeviceGestureState] = [:]
     private var enabled = false
-    private var pendingDelta: Float = 0
     private var lastAudioWriteAt: UInt64?
     // Allow audio writes at up to 120 Hz so gesture deltas are accumulated for
     // less time before reaching CoreAudio.
@@ -39,9 +43,7 @@ final class GestureProcessor: @unchecked Sendable {
         queue.sync {
             self.settings = settings
             enabled = true
-            gesture.reset()
-            gestureDevice = nil
-            pendingDelta = 0
+            deviceStates.removeAll()
             lastAudioWriteAt = nil
         }
     }
@@ -53,9 +55,7 @@ final class GestureProcessor: @unchecked Sendable {
     func pause() {
         queue.sync {
             enabled = false
-            gesture.cancel()
-            gestureDevice = nil
-            pendingDelta = 0
+            deviceStates.removeAll()
             lastAudioWriteAt = nil
         }
     }
@@ -75,51 +75,65 @@ final class GestureProcessor: @unchecked Sendable {
             wall: frameStarted.wall &- sample.receivedAtNanoseconds
         )
         guard enabled else { return }
+        var state = deviceStates[sample.deviceID] ?? DeviceGestureState()
         guard (0...32).contains(sample.contactCount) else {
-            gesture.cancel()
-            pendingDelta = 0
+            state.gesture.cancel()
+            state.pendingDelta = 0
+            deviceStates[sample.deviceID] = state
             publish(.invalidInput(sample.traceID))
             return
         }
 
         if sample.contactCount == 0 {
-            if let device = gestureDevice { writePendingDelta(for: device, traceID: sample.traceID) }
-            _ = feedGesture(sample, optionIsDown: optionIsDown)
-            gestureDevice = nil
+            if let device = state.outputDevice {
+                writePendingDelta(&state, for: device, traceID: sample.traceID)
+            }
+            _ = feedGesture(&state, sample: sample, optionIsDown: optionIsDown)
+            state.outputDevice = nil
+            deviceStates[sample.deviceID] = state
             return
         }
 
         if sample.contactCount != 1 {
-            pendingDelta = 0
-            _ = feedGesture(sample, optionIsDown: optionIsDown)
+            state.pendingDelta = 0
+            _ = feedGesture(&state, sample: sample, optionIsDown: optionIsDown)
+            deviceStates[sample.deviceID] = state
             return
         }
 
-        if gestureDevice == nil {
+        if state.outputDevice == nil {
             let measurement = PipelineLogger.beginMeasurement()
-            gestureDevice = try? audio.currentOutput()
+            state.outputDevice = try? audio.currentOutput()
             PipelineLogger.shared.finishMeasurement(measurement, traceID: sample.traceID, stage: "audio.current-output")
         }
-        let delta = feedGesture(sample, optionIsDown: optionIsDown)
-        guard let device = gestureDevice else { return }
-        if delta == nil, pendingDelta != 0 {
-            // A previously active gesture was rejected; do not flush its last step.
-            pendingDelta = 0
+        let delta = feedGesture(&state, sample: sample, optionIsDown: optionIsDown)
+        guard let device = state.outputDevice else {
+            deviceStates[sample.deviceID] = state
             return
         }
-        if let delta { pendingDelta += delta }
+        if delta == nil, state.pendingDelta != 0 {
+            // A previously active gesture was rejected; do not flush its last step.
+            state.pendingDelta = 0
+            deviceStates[sample.deviceID] = state
+            return
+        }
+        if let delta { state.pendingDelta += delta }
 
         let now = DispatchTime.now().uptimeNanoseconds
-        guard pendingDelta != 0,
+        guard state.pendingDelta != 0,
               lastAudioWriteAt.map({ now - $0 >= minimumWriteInterval }) ?? true
-        else { return }
-        writePendingDelta(for: device, traceID: sample.traceID)
+        else {
+            deviceStates[sample.deviceID] = state
+            return
+        }
+        writePendingDelta(&state, for: device, traceID: sample.traceID)
+        deviceStates[sample.deviceID] = state
     }
 
-    private func writePendingDelta(for device: AudioDeviceID, traceID: UInt64) {
-        guard pendingDelta != 0 else { return }
-        let delta = pendingDelta
-        pendingDelta = 0
+    private func writePendingDelta(_ state: inout DeviceGestureState, for device: AudioDeviceID, traceID: UInt64) {
+        guard state.pendingDelta != 0 else { return }
+        let delta = state.pendingDelta
+        state.pendingDelta = 0
 
         do {
             PipelineLogger.shared.record(traceID: traceID, stage: "audio.adjust-started")
@@ -131,16 +145,16 @@ final class GestureProcessor: @unchecked Sendable {
             publish(.volume(volume, traceID))
         } catch {
             PipelineLogger.shared.record(traceID: traceID, stage: "audio.adjust-failed")
-            gesture.cancel()
-            gestureDevice = nil
-            pendingDelta = 0
+            state.gesture.cancel()
+            state.outputDevice = nil
+            state.pendingDelta = 0
             publish(.audioUnavailable(traceID))
         }
     }
 
-    private func feedGesture(_ sample: TrackpadSample, optionIsDown: Bool) -> Float? {
+    private func feedGesture(_ state: inout DeviceGestureState, sample: TrackpadSample, optionIsDown: Bool) -> Float? {
         let measurement = PipelineLogger.beginMeasurement()
-        let delta = gesture.feed(settings: settings, sample: sample, optionIsDown: optionIsDown)
+        let delta = state.gesture.feed(settings: settings, sample: sample, optionIsDown: optionIsDown)
         PipelineLogger.shared.finishMeasurement(measurement, traceID: sample.traceID, stage: "gesture.feed")
         return delta
     }

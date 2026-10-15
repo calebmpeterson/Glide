@@ -20,7 +20,8 @@ static const char *const kFrameworkPath =
 
 static void *framework;
 static CFArrayRef devices;
-static _Atomic(void *) selected_device;
+static CFMutableArrayRef active_devices;
+static _Atomic(uint32_t) active_device_count;
 static _Atomic(EVTrackpadSampleHandler) sample_handler;
 static pthread_mutex_t lifecycle_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -37,9 +38,9 @@ static uint64_t clock_ns(clockid_t clock_id) {
     return (uint64_t)value.tv_sec * 1000000000ULL + (uint64_t)value.tv_nsec;
 }
 
-static int emit(int count, int id, float x, float y, uint64_t wall_start, uint64_t cpu_start) {
+static int emit(void *device, int count, int id, float x, float y, uint64_t wall_start, uint64_t cpu_start) {
     EVTrackpadSampleHandler handler = atomic_load(&sample_handler);
-    if (handler) handler(count, id, x, y,
+    if (handler) handler(count, id, x, y, (uintptr_t)device,
         clock_ns(CLOCK_MONOTONIC_RAW) - wall_start,
         clock_ns(CLOCK_THREAD_CPUTIME_ID) - cpu_start);
     return 0;
@@ -50,8 +51,7 @@ static int contact_frame(void *device, Finger *fingers, int count, double timest
     uint64_t filter_cpu_start = clock_ns(CLOCK_THREAD_CPUTIME_ID);
     (void)timestamp;
     (void)frame;
-    if (device != atomic_load(&selected_device)) return 0;
-    if (count < 0 || count > 32 || (count > 0 && fingers == NULL)) return emit(-1, 0, 0, 0, filter_wall_start, filter_cpu_start);
+    if (count < 0 || count > 32 || (count > 0 && fingers == NULL)) return emit(device, -1, 0, 0, 0, filter_wall_start, filter_cpu_start);
 
     int active_count = 0;
     Finger *contact = NULL;
@@ -61,12 +61,12 @@ static int contact_frame(void *device, Finger *fingers, int count, double timest
             contact = &fingers[i];
         }
     }
-    if (active_count != 1) return emit(active_count, 0, 0, 0, filter_wall_start, filter_cpu_start);
+    if (active_count != 1) return emit(device, active_count, 0, 0, 0, filter_wall_start, filter_cpu_start);
 
     float x = contact->normalized.position.x;
     float y = contact->normalized.position.y;
-    if (!isfinite(x) || !isfinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return emit(-1, 0, 0, 0, filter_wall_start, filter_cpu_start);
-    return emit(1, contact->id, x, y, filter_wall_start, filter_cpu_start);
+    if (!isfinite(x) || !isfinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return emit(device, -1, 0, 0, 0, filter_wall_start, filter_cpu_start);
+    return emit(device, 1, contact->id, x, y, filter_wall_start, filter_cpu_start);
 }
 
 static int resolve_symbols(void) {
@@ -83,11 +83,16 @@ static int resolve_symbols(void) {
 }
 
 static void stop_locked(void) {
-    void *device = atomic_exchange(&selected_device, NULL);
-    if (device) {
-        MTDeviceStop(device);
-        MTUnregisterContactFrameCallback(device, contact_frame);
+    if (active_devices) {
+        for (CFIndex index = 0; index < CFArrayGetCount(active_devices); index++) {
+            void *device = (void *)CFArrayGetValueAtIndex(active_devices, index);
+            MTDeviceStop(device);
+            MTUnregisterContactFrameCallback(device, contact_frame);
+        }
+        CFRelease(active_devices);
+        active_devices = NULL;
     }
+    atomic_store(&active_device_count, 0);
     if (devices) {
         CFRelease(devices);
         devices = NULL;
@@ -106,22 +111,34 @@ int32_t ev_capture_restart(void) {
         pthread_mutex_unlock(&lifecycle_lock);
         return -3;
     }
+    active_devices = CFArrayCreateMutable(kCFAllocatorDefault, 0, NULL);
+    if (!active_devices) {
+        CFRelease(devices);
+        devices = NULL;
+        pthread_mutex_unlock(&lifecycle_lock);
+        return -3;
+    }
     for (CFIndex index = 0; index < CFArrayGetCount(devices); index++) {
         void *device = (void *)CFArrayGetValueAtIndex(devices, index);
         int rows = 0;
         int columns = 0;
         MTDeviceGetSensorDimensions(device, &rows, &columns);
         if (rows < 10) continue;
-        atomic_store(&selected_device, device);
+        CFArrayAppendValue(active_devices, device);
         MTRegisterContactFrameCallback(device, contact_frame);
         MTDeviceStart(device, 0);
-        pthread_mutex_unlock(&lifecycle_lock);
-        return 0;
+        atomic_fetch_add(&active_device_count, 1);
     }
-    CFRelease(devices);
-    devices = NULL;
+    if (atomic_load(&active_device_count) == 0) {
+        CFRelease(active_devices);
+        active_devices = NULL;
+        CFRelease(devices);
+        devices = NULL;
+        pthread_mutex_unlock(&lifecycle_lock);
+        return -3;
+    }
     pthread_mutex_unlock(&lifecycle_lock);
-    return -3;
+    return 0;
 }
 
 int32_t ev_capture_start(EVTrackpadSampleHandler handler) {
@@ -139,5 +156,5 @@ void ev_capture_stop(void) {
 }
 
 int32_t ev_capture_is_running(void) {
-    return atomic_load(&selected_device) != NULL;
+    return atomic_load(&active_device_count) > 0;
 }

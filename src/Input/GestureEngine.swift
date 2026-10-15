@@ -5,6 +5,7 @@ struct TrackpadSample: Sendable {
     let contactID: Int
     let x: Float
     let y: Float
+    let deviceID: UInt
     let timestamp: ContinuousClock.Instant
     let traceID: UInt64
     let receivedAtNanoseconds: UInt64

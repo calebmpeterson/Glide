@@ -9,7 +9,7 @@ protocol TrackpadCapturing: AnyObject {
 enum TrackpadCaptureError: LocalizedError {
     case unavailable(Int32)
 
-    var errorDescription: String? { "A supported built-in trackpad could not be started." }
+    var errorDescription: String? { "No compatible trackpad device could be started." }
 }
 
 private enum CallbackRegistry {
@@ -28,7 +28,7 @@ private enum CallbackRegistry {
         lock.unlock()
     }
 
-    static func deliver(contactCount: Int32, contactID: Int32, x: Float, y: Float,
+    static func deliver(contactCount: Int32, contactID: Int32, x: Float, y: Float, deviceID: UInt,
                         filterWallNanoseconds: UInt64, filterCPUNanoseconds: UInt64) {
         let traceID = PipelineLogger.shared.beginTrace()
         let callbackStarted = PipelineLogger.beginMeasurement()
@@ -42,6 +42,7 @@ private enum CallbackRegistry {
         PipelineLogger.shared.record(traceID: traceID, stage: "bridge.swift-received", at: callbackStarted.wall)
         callback?(TrackpadSample(
             contactCount: Int(contactCount), contactID: Int(contactID), x: x, y: y,
+            deviceID: deviceID,
             timestamp: ContinuousClock().now,
             traceID: traceID,
             receivedAtNanoseconds: callbackStarted.wall
@@ -51,9 +52,9 @@ private enum CallbackRegistry {
 }
 
 @_cdecl("glide_trackpad_sample")
-private func glide_trackpad_sample(_ count: Int32, _ identifier: Int32, _ x: Float, _ y: Float,
+private func glide_trackpad_sample(_ count: Int32, _ identifier: Int32, _ x: Float, _ y: Float, _ deviceID: UInt,
                                   _ filterWallNanoseconds: UInt64, _ filterCPUNanoseconds: UInt64) {
-    CallbackRegistry.deliver(contactCount: count, contactID: identifier, x: x, y: y,
+    CallbackRegistry.deliver(contactCount: count, contactID: identifier, x: x, y: y, deviceID: deviceID,
                              filterWallNanoseconds: filterWallNanoseconds,
                              filterCPUNanoseconds: filterCPUNanoseconds)
 }

@@ -98,7 +98,7 @@ struct GestureEngineTests {
     private static func sample(_ count: Int, _ id: Int, _ x: Float, _ y: Float, _ timestamp: ContinuousClock.Instant) -> TrackpadSample {
         TrackpadSample(
             contactCount: count, contactID: id, x: x, y: y, timestamp: timestamp,
-            traceID: 0, receivedAtNanoseconds: 0
+            deviceID: 0, traceID: 0, receivedAtNanoseconds: 0
         )
     }
 

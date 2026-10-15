@@ -78,7 +78,7 @@ struct PreferencesView: View {
             Button("Enable") { controller.enable() }
             Button("Cancel", role: .cancel) { draft.enabled = false }
         } message: {
-            Text("While enabled, Glide receives raw contact coordinates from the built-in trackpad to recognize the current gesture. This experimental feature uses an unsupported Apple private framework.")
+            Text("While enabled, Glide receives raw contact coordinates from compatible trackpad devices to recognize the current gesture. This experimental feature uses an unsupported Apple private framework.")
         }
     }
 

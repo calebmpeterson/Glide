@@ -75,7 +75,7 @@ final class GlideController: ObservableObject {
             isEnabled = false
             settings.enabled = false
             statusMessage = "Trackpad unavailable."
-            lastError = "A supported built-in trackpad could not be started."
+            lastError = "No compatible trackpad device could be started."
         }
     }
 

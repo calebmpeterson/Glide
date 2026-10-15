@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-typedef void (*EVTrackpadSampleHandler)(int32_t contact_count, int32_t contact_id, float x, float y,
+typedef void (*EVTrackpadSampleHandler)(int32_t contact_count, int32_t contact_id, float x, float y, uintptr_t device_id,
     uint64_t filter_wall_ns, uint64_t filter_cpu_ns);
 
 int32_t ev_capture_start(EVTrackpadSampleHandler handler);
