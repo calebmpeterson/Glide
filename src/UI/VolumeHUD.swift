@@ -1,7 +1,16 @@
 import AppKit
 
 enum GlideVolumeSymbol {
-    static func name(for percent: Int?) -> String {
+    static func menuBarName(for percent: Int?) -> String {
+        switch percent ?? 0 {
+        case ...0: "speaker.slash"
+        case 1...33: "speaker"
+        case 34...66: "speaker.wave.1"
+        default: "speaker.wave.2"
+        }
+    }
+
+    static func hudName(for percent: Int?) -> String {
         switch percent ?? 0 {
         case ...0: "speaker.slash.fill"
         case 1...33: "speaker.fill"
@@ -46,7 +55,7 @@ final class VolumeHUD {
         let boundedVolume = min(max(volume, 0), 1)
         content.volume = boundedVolume
         let percent = Int((boundedVolume * 100).rounded())
-        content.symbolName = GlideVolumeSymbol.name(for: percent)
+        content.symbolName = GlideVolumeSymbol.hudName(for: percent)
         content.setAccessibilityLabel("System volume \(percent) percent")
         content.needsDisplay = true
 

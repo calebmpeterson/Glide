@@ -56,6 +56,22 @@ struct PreferencesView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Startup") {
+                Toggle("Open at login", isOn: openAtLoginBinding)
+                    .accessibilityHint("Automatically opens Glide when you log into your Mac.")
+                if controller.loginItemRequiresApproval {
+                    Text("Allow Glide in System Settings > General > Login Items to finish enabling this.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if let error = controller.loginItemError {
+                    Text("Could not update login settings: \(error)")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .accessibilityLabel("Login item error: \(error)")
+                }
+            }
+
             Section("Status") {
                 LabeledContent("System volume") { Text(controller.volumePercent.map { "\($0)%" } ?? "Unavailable") }
                 LabeledContent("Output control") {
@@ -89,6 +105,13 @@ struct PreferencesView: View {
                 if enabled { showDisclosure = true }
                 else { controller.disable() }
             }
+        )
+    }
+
+    private var openAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { controller.opensAtLogin },
+            set: { controller.setOpenAtLogin($0) }
         )
     }
 }

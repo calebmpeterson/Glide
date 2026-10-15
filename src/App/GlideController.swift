@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreAudio
 import Foundation
+import ServiceManagement
 
 @MainActor
 final class GlideController: ObservableObject {
@@ -9,6 +10,9 @@ final class GlideController: ObservableObject {
     @Published private(set) var isEnabled = false
     @Published private(set) var volumePercent: Int?
     @Published private(set) var outputIsAdjustable = false
+    @Published private(set) var opensAtLogin = false
+    @Published private(set) var loginItemRequiresApproval = false
+    @Published private(set) var loginItemError: String?
     @Published private(set) var statusMessage = "Paused. Enable Glide to begin observing the trackpad."
     @Published private(set) var lastError: String?
 
@@ -33,6 +37,7 @@ final class GlideController: ObservableObject {
         self.audio = audio
         PipelineLogger.shared.startNewSession()
         settings = store.load()
+        refreshLoginItemStatus()
         configureStatusItem()
         refreshVolume()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -90,8 +95,40 @@ final class GlideController: ObservableObject {
     }
 
     func showPreferences() {
+        refreshLoginItemStatus()
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first(where: { $0.canBecomeKey })?.makeKeyAndOrderFront(nil)
+    }
+
+    func setOpenAtLogin(_ shouldOpenAtLogin: Bool) {
+        loginItemError = nil
+        do {
+            if shouldOpenAtLogin {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            loginItemError = error.localizedDescription
+        }
+        refreshLoginItemStatus()
+    }
+
+    private func refreshLoginItemStatus() {
+        switch SMAppService.mainApp.status {
+        case .enabled:
+            opensAtLogin = true
+            loginItemRequiresApproval = false
+        case .requiresApproval:
+            opensAtLogin = true
+            loginItemRequiresApproval = true
+        case .notRegistered, .notFound:
+            opensAtLogin = false
+            loginItemRequiresApproval = false
+        @unknown default:
+            opensAtLogin = false
+            loginItemRequiresApproval = false
+        }
     }
 
     private func startCapture() throws {
@@ -140,7 +177,7 @@ final class GlideController: ObservableObject {
         item.button?.imageScaling = .scaleProportionallyDown
         item.button?.font = .menuBarFont(ofSize: 0)
         let menu = NSMenu()
-        let preferences = NSMenuItem(title: "Show Glide", action: #selector(openPreferences), keyEquivalent: "")
+        let preferences = NSMenuItem(title: "Show settings", action: #selector(openPreferences), keyEquivalent: "")
         preferences.target = self
         menu.addItem(preferences)
         menu.addItem(.separator())
@@ -154,7 +191,7 @@ final class GlideController: ObservableObject {
 
     private func updateStatusItem() {
         let percentage = volumePercent.map { "\($0)%" } ?? "--%"
-        let symbol = GlideVolumeSymbol.name(for: volumePercent)
+        let symbol = GlideVolumeSymbol.menuBarName(for: volumePercent)
         statusItem?.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "System volume")
         statusItem?.button?.title = percentage
         statusItem?.button?.toolTip = "System volume: \(percentage)"

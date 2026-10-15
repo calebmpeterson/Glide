@@ -20,7 +20,7 @@ $(OBJECT): src/Input/PrivateMultitouchBridge.c src/Input/PrivateMultitouchBridge
 $(EXECUTABLE): $(SOURCES) $(OBJECT) src/Info.plist
 	@echo "Building $(APP_NAME).app..."
 	@mkdir -p $(MACOS_DIR) $(MODULE_CACHE_DIR)
-	@swiftc $(SOURCES) $(OBJECT) -swift-version 6 -parse-as-library -target $$(uname -m)-apple-macosx15.0 -module-cache-path $(MODULE_CACHE_DIR) -import-objc-header src/Input/PrivateMultitouchBridge.h -framework SwiftUI -framework AppKit -framework CoreAudio -framework AudioToolbox -o $(EXECUTABLE)
+	@swiftc $(SOURCES) $(OBJECT) -swift-version 6 -parse-as-library -target $$(uname -m)-apple-macosx15.0 -module-cache-path $(MODULE_CACHE_DIR) -import-objc-header src/Input/PrivateMultitouchBridge.h -framework SwiftUI -framework AppKit -framework CoreAudio -framework AudioToolbox -framework ServiceManagement -o $(EXECUTABLE)
 	@cp src/Info.plist $(CONTENTS_DIR)/Info.plist
 	@codesign --force --deep -s - $(APP_BUNDLE)
 	@echo "Build complete: $(APP_BUNDLE)"
