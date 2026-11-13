@@ -10,5 +10,6 @@ int32_t ev_capture_start(EVTrackpadSampleHandler handler);
 void ev_capture_stop(void);
 int32_t ev_capture_restart(void);
 int32_t ev_capture_is_running(void);
+int32_t ev_haptic_actuate(uintptr_t device_id, int32_t actuation_id);
 
 #endif

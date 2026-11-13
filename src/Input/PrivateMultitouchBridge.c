@@ -23,6 +23,7 @@ static CFArrayRef devices;
 static CFMutableArrayRef active_devices;
 static _Atomic(uint32_t) active_device_count;
 static _Atomic(EVTrackpadSampleHandler) sample_handler;
+static CFMutableArrayRef actuators;
 static pthread_mutex_t lifecycle_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static CFArrayRef (*MTDeviceCreateList)(void);
@@ -31,6 +32,11 @@ static void (*MTRegisterContactFrameCallback)(void *, MTFrameCallback);
 static void (*MTUnregisterContactFrameCallback)(void *, MTFrameCallback);
 static void (*MTDeviceStart)(void *, int);
 static void (*MTDeviceStop)(void *);
+static int (*MTDeviceGetDeviceID)(void *, uint64_t *);
+static CFTypeRef (*MTActuatorCreateFromDeviceID)(uint64_t);
+static int (*MTActuatorOpen)(CFTypeRef);
+static int (*MTActuatorClose)(CFTypeRef);
+static int (*MTActuatorActuate)(CFTypeRef, int32_t, uint32_t, float, float);
 
 static uint64_t clock_ns(clockid_t clock_id) {
     struct timespec value;
@@ -78,11 +84,41 @@ static int resolve_symbols(void) {
     MTUnregisterContactFrameCallback = dlsym(framework, "MTUnregisterContactFrameCallback");
     MTDeviceStart = dlsym(framework, "MTDeviceStart");
     MTDeviceStop = dlsym(framework, "MTDeviceStop");
+    // Haptics are optional: capture keeps working if these symbols disappear.
+    MTDeviceGetDeviceID = dlsym(framework, "MTDeviceGetDeviceID");
+    MTActuatorCreateFromDeviceID = dlsym(framework, "MTActuatorCreateFromDeviceID");
+    MTActuatorOpen = dlsym(framework, "MTActuatorOpen");
+    MTActuatorClose = dlsym(framework, "MTActuatorClose");
+    MTActuatorActuate = dlsym(framework, "MTActuatorActuate");
     return MTDeviceCreateList && MTDeviceGetSensorDimensions && MTRegisterContactFrameCallback
         && MTUnregisterContactFrameCallback && MTDeviceStart && MTDeviceStop ? 0 : -2;
 }
 
+static CFTypeRef open_actuator(void *device) {
+    uint64_t id = 0;
+    if (!MTDeviceGetDeviceID || !MTActuatorCreateFromDeviceID || !MTActuatorOpen || !MTActuatorClose || !MTActuatorActuate) return NULL;
+    if (MTDeviceGetDeviceID(device, &id) != 0) return NULL;
+    CFTypeRef actuator = MTActuatorCreateFromDeviceID(id);
+    if (!actuator) return NULL;
+    if (MTActuatorOpen(actuator) != 0) {
+        CFRelease(actuator);
+        return NULL;
+    }
+    return actuator;
+}
+
 static void stop_locked(void) {
+    if (actuators) {
+        for (CFIndex index = 0; index < CFArrayGetCount(actuators); index++) {
+            CFTypeRef actuator = CFArrayGetValueAtIndex(actuators, index);
+            if (actuator) {
+                MTActuatorClose(actuator);
+                CFRelease(actuator);
+            }
+        }
+        CFRelease(actuators);
+        actuators = NULL;
+    }
     if (active_devices) {
         for (CFIndex index = 0; index < CFArrayGetCount(active_devices); index++) {
             void *device = (void *)CFArrayGetValueAtIndex(active_devices, index);
@@ -118,6 +154,7 @@ int32_t ev_capture_restart(void) {
         pthread_mutex_unlock(&lifecycle_lock);
         return -3;
     }
+    actuators = CFArrayCreateMutable(kCFAllocatorDefault, 0, NULL);
     for (CFIndex index = 0; index < CFArrayGetCount(devices); index++) {
         void *device = (void *)CFArrayGetValueAtIndex(devices, index);
         int rows = 0;
@@ -125,6 +162,7 @@ int32_t ev_capture_restart(void) {
         MTDeviceGetSensorDimensions(device, &rows, &columns);
         if (rows < 10) continue;
         CFArrayAppendValue(active_devices, device);
+        if (actuators) CFArrayAppendValue(actuators, open_actuator(device));
         MTRegisterContactFrameCallback(device, contact_frame);
         MTDeviceStart(device, 0);
         atomic_fetch_add(&active_device_count, 1);
@@ -153,6 +191,21 @@ void ev_capture_stop(void) {
     stop_locked();
     atomic_store(&sample_handler, NULL);
     pthread_mutex_unlock(&lifecycle_lock);
+}
+
+int32_t ev_haptic_actuate(uintptr_t device_id, int32_t actuation_id) {
+    int32_t result = -1;
+    pthread_mutex_lock(&lifecycle_lock);
+    if (active_devices && actuators) {
+        for (CFIndex index = 0; index < CFArrayGetCount(active_devices); index++) {
+            if ((uintptr_t)CFArrayGetValueAtIndex(active_devices, index) != device_id) continue;
+            CFTypeRef actuator = CFArrayGetValueAtIndex(actuators, index);
+            if (actuator) result = MTActuatorActuate(actuator, actuation_id, 0, 0.0f, 0.0f);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&lifecycle_lock);
+    return result;
 }
 
 int32_t ev_capture_is_running(void) {

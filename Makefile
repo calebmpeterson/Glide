@@ -27,7 +27,7 @@ $(EXECUTABLE): $(SOURCES) $(OBJECT) src/Info.plist
 
 test:
 	@mkdir -p $(BUILD_DIR) $(MODULE_CACHE_DIR)
-	@swiftc src/App/SettingsStore.swift src/Input/GestureEngine.swift src/Tests/GestureEngineTests.swift -swift-version 6 -parse-as-library -module-cache-path $(MODULE_CACHE_DIR) -o $(BUILD_DIR)/GestureEngineTests
+	@swiftc src/App/SettingsStore.swift src/Input/GestureEngine.swift src/Audio/VolumeTickTracker.swift src/Tests/GestureEngineTests.swift -swift-version 6 -parse-as-library -module-cache-path $(MODULE_CACHE_DIR) -o $(BUILD_DIR)/GestureEngineTests
 	@$(BUILD_DIR)/GestureEngineTests
 
 run: $(EXECUTABLE)

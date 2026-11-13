@@ -30,6 +30,7 @@ final class GestureProcessor: @unchecked Sendable {
     private var deviceStates: [UInt: DeviceGestureState] = [:]
     private var enabled = false
     private var lastAudioWriteAt: UInt64?
+    private var tickTracker = VolumeTickTracker()
     // Allow audio writes at up to 120 Hz so gesture deltas are accumulated for
     // less time before reaching CoreAudio.
     private let minimumWriteInterval: UInt64 = 8_333_333
@@ -86,7 +87,7 @@ final class GestureProcessor: @unchecked Sendable {
 
         if sample.contactCount == 0 {
             if let device = state.outputDevice {
-                writePendingDelta(&state, for: device, traceID: sample.traceID)
+                writePendingDelta(&state, for: device, trackpad: sample.deviceID, traceID: sample.traceID)
             }
             _ = feedGesture(&state, sample: sample, optionIsDown: optionIsDown)
             state.outputDevice = nil
@@ -104,6 +105,9 @@ final class GestureProcessor: @unchecked Sendable {
         if state.outputDevice == nil {
             let measurement = PipelineLogger.beginMeasurement()
             state.outputDevice = try? audio.currentOutput()
+            if let device = state.outputDevice, let volume = try? audio.readVolume(for: device) {
+                tickTracker.seed(volume)
+            }
             PipelineLogger.shared.finishMeasurement(measurement, traceID: sample.traceID, stage: "audio.current-output")
         }
         let delta = feedGesture(&state, sample: sample, optionIsDown: optionIsDown)
@@ -126,11 +130,11 @@ final class GestureProcessor: @unchecked Sendable {
             deviceStates[sample.deviceID] = state
             return
         }
-        writePendingDelta(&state, for: device, traceID: sample.traceID)
+        writePendingDelta(&state, for: device, trackpad: sample.deviceID, traceID: sample.traceID)
         deviceStates[sample.deviceID] = state
     }
 
-    private func writePendingDelta(_ state: inout DeviceGestureState, for device: AudioDeviceID, traceID: UInt64) {
+    private func writePendingDelta(_ state: inout DeviceGestureState, for device: AudioDeviceID, trackpad: UInt, traceID: UInt64) {
         guard state.pendingDelta != 0 else { return }
         let delta = state.pendingDelta
         state.pendingDelta = 0
@@ -142,6 +146,7 @@ final class GestureProcessor: @unchecked Sendable {
             PipelineLogger.shared.finishMeasurement(measurement, traceID: traceID, stage: "audio.adjust-total")
             PipelineLogger.shared.record(traceID: traceID, stage: "audio.adjust-finished")
             lastAudioWriteAt = DispatchTime.now().uptimeNanoseconds
+            tickHaptics(for: volume, on: trackpad)
             publish(.volume(volume, traceID))
         } catch {
             PipelineLogger.shared.record(traceID: traceID, stage: "audio.adjust-failed")
@@ -150,6 +155,13 @@ final class GestureProcessor: @unchecked Sendable {
             state.pendingDelta = 0
             publish(.audioUnavailable(traceID))
         }
+    }
+
+    private func tickHaptics(for volume: Float, on trackpad: UInt) {
+        guard let tick = tickTracker.tick(for: volume) else { return }
+        // Actuation IDs come from MultitouchSupport's built-in waveform table.
+        let actuationID: Int32 = tick == .limit ? 6 : 4
+        _ = ev_haptic_actuate(trackpad, actuationID)
     }
 
     private func feedGesture(_ state: inout DeviceGestureState, sample: TrackpadSample, optionIsDown: Bool) -> Float? {

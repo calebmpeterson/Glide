@@ -10,6 +10,7 @@ struct GestureEngineTests {
         testOptionAndInversion()
         testBothEdgesAndMalformedSamples()
         testSettingsValidation()
+        testVolumeTickTracker()
         print("GestureEngineTests passed")
     }
 
@@ -95,10 +96,24 @@ struct GestureEngineTests {
         expect(settings.validated() == nil)
     }
 
+    private static func testVolumeTickTracker() {
+        var tracker = VolumeTickTracker()
+        expect(tracker.tick(for: 0.50) == nil, "first value only seeds the tracker")
+        expect(tracker.tick(for: 0.505) == nil, "staying within a step is silent")
+        expect(tracker.tick(for: 0.52) == .step, "crossing a step ticks")
+        expect(tracker.tick(for: 0.52) == nil, "repeating a value is silent")
+        expect(tracker.tick(for: 0.50) == .step, "ticks on the way down")
+        expect(tracker.tick(for: 1.0) == .limit, "reaching the maximum is a limit tick")
+        expect(tracker.tick(for: 1.0) == nil)
+        expect(tracker.tick(for: 0.0) == .limit, "reaching zero is a limit tick")
+        tracker.seed(0.5)
+        expect(tracker.tick(for: 0.505) == nil, "seed resets the baseline without ticking")
+    }
+
     private static func sample(_ count: Int, _ id: Int, _ x: Float, _ y: Float, _ timestamp: ContinuousClock.Instant) -> TrackpadSample {
         TrackpadSample(
-            contactCount: count, contactID: id, x: x, y: y, timestamp: timestamp,
-            deviceID: 0, traceID: 0, receivedAtNanoseconds: 0
+            contactCount: count, contactID: id, x: x, y: y,
+            deviceID: 0, timestamp: timestamp, traceID: 0, receivedAtNanoseconds: 0
         )
     }
 
